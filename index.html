@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Tracker Pro</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', system-ui, sans-serif; }
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.05); }
+        
+        /* Custom Scrollbar for the table area */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        function App() {
+            // --- APP STATE ---
+            const [activeTab, setActiveTab] = useState('dashboard');
+            
+            // --- SETTINGS STATE ---
+            const [userName, setUserName] = useState(() => localStorage.getItem('expensio_name') || 'Obakeng');
+            const [currency, setCurrency] = useState(() => localStorage.getItem('expensio_currency') || 'R');
+            const [monthlyBudget, setMonthlyBudget] = useState(() => localStorage.getItem('expensio_budget') || '5000'); // NEW: Budget state
+
+            // --- TRANSACTION STATE ---
+            const [transactions, setTransactions] = useState(() => {
+                const saved = localStorage.getItem('expensio_data');
+                return saved ? JSON.parse(saved) : [];
+            });
+
+            // Form States
+            const [text, setText] = useState('');
+            const [amount, setAmount] = useState('');
+            const [type, setType] = useState('expense');
+            const [category, setCategory] = useState('Housing');
+
+            // NEW: Search & Filter States
+            const [searchTerm, setSearchTerm] = useState('');
+            const [filterType, setFilterType] = useState('all');
+
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            // --- CALCULATIONS ---
+            const amounts = transactions.map(transaction => 
+                transaction.type === 'income' ? transaction.amount : -transaction.amount
+            );
+            
+            const total = amounts.reduce((acc, item) => (acc += item), 0).toFixed(2);
+            const income = transactions.filter(item => item.type === 'income').reduce((acc, item) => (acc += item.amount), 0).toFixed(2);
+            const expense = transactions.filter(item => item.type === 'expense').reduce((acc, item) => (acc += item.amount), 0).toFixed(2);
+
+            // NEW: Budget Calculation
+            const budgetPercentage = monthlyBudget > 0 ? Math.min((expense / monthlyBudget) * 100, 100).toFixed(1) : 0;
+            const isOverBudget = expense > Number(monthlyBudget);
+
+            // --- EFFECTS ---
+            useEffect(() => {
+                localStorage.setItem('expensio_data', JSON.stringify(transactions));
+            }, [transactions]);
+
+            useEffect(() => {
+                localStorage.setItem('expensio_name', userName);
+                localStorage.setItem('expensio_currency', currency);
+                localStorage.setItem('expensio_budget', monthlyBudget);
+            }, [userName, currency, monthlyBudget]);
+
+            useEffect(() => {
+                if (activeTab === 'dashboard') {
+                    updateChart();
+                }
+            }, [transactions, activeTab]);
+
+            // --- ACTIONS ---
+            const addTransaction = (e) => {
+                e.preventDefault();
+                if (!text || !amount) return;
+
+                const newTransaction = {
+                    id: Math.floor(Math.random() * 100000000),
+                    text,
+                    amount: +amount,
+                    type,
+                    category: type === 'income' ? 'Income' : category,
+                    date: new Date().toLocaleDateString()
+                };
+
+                setTransactions([newTransaction, ...transactions]);
+                setText('');
+                setAmount('');
+            };
+
+            const deleteTransaction = (id) => {
+                setTransactions(transactions.filter(t => t.id !== id));
+            };
+
+            const clearAllData = () => {
+                if(window.confirm("Are you sure you want to delete all transactions? This cannot be undone.")) {
+                    setTransactions([]);
+                }
+            };
+
+            // NEW: Export to CSV Function
+            const exportToCSV = () => {
+                const headers = ['Date', 'Description', 'Category', 'Type', 'Amount'];
+                const rows = transactions.map(t => `${t.date},"${t.text}",${t.category},${t.type},${t.amount}`);
+                const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows].join('\n');
+                
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", "My_Expenses.csv");
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            // NEW: Filtered Transactions Array
+            const filteredTransactions = transactions.filter(t => {
+                const matchesSearch = t.text.toLowerCase().includes(searchTerm.toLowerCase()) || t.category.toLowerCase().includes(searchTerm.toLowerCase());
+                const matchesType = filterType === 'all' || t.type === filterType;
+                return matchesSearch && matchesType;
+            });
+
+            // --- CHART.JS INTEGRATION ---
+            const updateChart = () => {
+                if (!chartRef.current) return;
+
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+
+                const ctx = chartRef.current.getContext('2d');
+                const expensesOnly = transactions.filter(t => t.type === 'expense');
+                const categories = [...new Set(expensesOnly.map(t => t.category))];
+                const dataPoints = categories.map(cat => {
+                    return expensesOnly.filter(t => t.category === cat).reduce((acc, t) => acc + t.amount, 0);
+                });
+
+                chartInstance.current = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: categories.length ? categories : ['No Data'],
+                        datasets: [{
+                            data: dataPoints.length ? dataPoints : [1],
+                            backgroundColor: ['#818cf8', '#34d399', '#fbbf24', '#f87171', '#60a5fa'],
+                            borderWidth: 0,
+                            hoverOffset: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { position: 'right', labels: { color: '#cbd5e1' } } },
+                        cutout: '70%'
+                    }
+                });
+            };
+
+            return (
+                <div className="flex h-screen overflow-hidden">
+                    
+                    {/* SIDEBAR */}
+                    <aside className="w-64 glass-panel border-r border-slate-700 hidden md:flex flex-col z-10">
+                        <div className="p-6 text-2xl font-bold tracking-wider text-indigo-400">
+                            <i className="fas fa-wallet mr-2"></i> EXPENSIO
+                        </div>
+                        <nav className="flex-1 px-4 space-y-2 mt-4">
+                            <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center px-4 py-3 rounded-lg transition-colors ${activeTab === 'dashboard' ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                                <i className="fas fa-home w-6 text-left"></i> Dashboard
+                            </button>
+                            <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center px-4 py-3 rounded-lg transition-colors ${activeTab === 'settings' ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                                <i className="fas fa-cog w-6 text-left"></i> Settings
+                            </button>
+                        </nav>
+                    </aside>
+
+                    {/* MAIN CONTENT */}
+                    <main className="flex-1 flex flex-col h-screen overflow-y-auto p-6 md:p-8">
+                        <header className="flex justify-between items-center mb-8">
+                            <h1 className="text-3xl font-bold">{activeTab === 'dashboard' ? 'Overview' : 'Settings'}</h1>
+                            <div className="flex items-center gap-3 bg-slate-800 px-4 py-2 rounded-full border border-slate-700">
+                                <i className="fas fa-user-circle text-2xl text-indigo-400"></i>
+                                <span className="text-sm font-medium">{userName}</span>
+                            </div>
+                        </header>
+
+                        {/* VIEW CONTROLLER */}
+                        {activeTab === 'dashboard' ? (
+                            
+                            /* --- DASHBOARD VIEW --- */
+                            <div className="animate-fade-in flex flex-col gap-6">
+                                
+                                {/* STATS ROW */}
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div className="glass-panel p-6 rounded-2xl relative overflow-hidden">
+                                        <div className="text-slate-400 text-sm font-semibold mb-1">Total Balance</div>
+                                        <div className="text-4xl font-bold text-white">{currency} {total}</div>
+                                        <i className="fas fa-university absolute -bottom-4 -right-4 text-8xl text-slate-700/30"></i>
+                                    </div>
+                                    <div className="glass-panel p-6 rounded-2xl border-l-4 border-emerald-400">
+                                        <div className="text-slate-400 text-sm font-semibold mb-1">Total Income</div>
+                                        <div className="text-3xl font-bold text-emerald-400">+ {currency} {income}</div>
+                                    </div>
+                                    <div className="glass-panel p-6 rounded-2xl border-l-4 border-rose-400">
+                                        <div className="text-slate-400 text-sm font-semibold mb-1">Total Expenses</div>
+                                        <div className="text-3xl font-bold text-rose-400">- {currency} {expense}</div>
+                                    </div>
+                                </div>
+
+                                {/* NEW FEATURE 2: BUDGET TRACKER */}
+                                <div className="glass-panel p-6 rounded-2xl">
+                                    <div className="flex justify-between items-end mb-2">
+                                        <div>
+                                            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-1">Monthly Budget Goal</h3>
+                                            <div className="text-xl font-bold">
+                                                {currency} {expense} <span className="text-slate-500 text-lg font-normal">/ {currency} {monthlyBudget}</span>
+                                            </div>
+                                        </div>
+                                        <div className={`text-sm font-bold ${isOverBudget ? 'text-rose-400' : 'text-indigo-400'}`}>
+                                            {budgetPercentage}% {isOverBudget ? ' (Over Budget!)' : 'Used'}
+                                        </div>
+                                    </div>
+                                    <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700">
+                                        <div 
+                                            className={`h-3 rounded-full transition-all duration-1000 ${isOverBudget ? 'bg-rose-500' : 'bg-indigo-500'}`} 
+                                            style={{ width: `${budgetPercentage}%` }}>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* ADD FORM & CHART */}
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                    <div className="glass-panel p-6 rounded-2xl">
+                                        <h2 className="text-xl font-bold mb-4 border-b border-slate-700 pb-2">Quick Add</h2>
+                                        <form onSubmit={addTransaction} className="space-y-4">
+                                            <div className="flex gap-4">
+                                                <button type="button" onClick={() => setType('expense')} className={`flex-1 py-2 rounded-lg font-medium transition ${type === 'expense' ? 'bg-rose-500 text-white' : 'bg-slate-800 text-slate-400'}`}>Expense</button>
+                                                <button type="button" onClick={() => setType('income')} className={`flex-1 py-2 rounded-lg font-medium transition ${type === 'income' ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-400'}`}>Income</button>
+                                            </div>
+                                            
+                                            <div>
+                                                <label className="text-xs text-slate-400 uppercase tracking-wider mb-1 block">Description</label>
+                                                <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. Groceries" className="w-full bg-slate-800/50 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500 transition" />
+                                            </div>
+
+                                            <div className="flex gap-4">
+                                                <div className="flex-1">
+                                                    <label className="text-xs text-slate-400 uppercase tracking-wider mb-1 block">Amount ({currency})</label>
+                                                    <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="w-full bg-slate-800/50 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500 transition" />
+                                                </div>
+                                                
+                                                {type === 'expense' && (
+                                                    <div className="flex-1">
+                                                        <label className="text-xs text-slate-400 uppercase tracking-wider mb-1 block">Category</label>
+                                                        <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500 transition">
+                                                            <option value="Housing">Housing</option>
+                                                            <option value="Food">Food</option>
+                                                            <option value="Transport">Transport</option>
+                                                            <option value="Entertainment">Entertainment</option>
+                                                            <option value="Utilities">Utilities</option>
+                                                        </select>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <button type="submit" className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 rounded-lg transition-colors mt-2 shadow-lg shadow-indigo-500/20">
+                                                Add {type === 'income' ? 'Income' : 'Expense'}
+                                            </button>
+                                        </form>
+                                    </div>
+
+                                    <div className="glass-panel p-6 rounded-2xl flex flex-col">
+                                        <h2 className="text-xl font-bold mb-4 border-b border-slate-700 pb-2">Expense Breakdown</h2>
+                                        <div className="flex-1 relative min-h-[200px]">
+                                            <canvas ref={chartRef}></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* TABLE & NEW FEATURE 1: SEARCH/FILTER */}
+                                <div className="glass-panel rounded-2xl overflow-hidden flex-1 flex flex-col">
+                                    <div className="p-6 border-b border-slate-700 bg-slate-800/30 flex flex-col sm:flex-row justify-between items-center gap-4">
+                                        <h2 className="text-xl font-bold">Recent Transactions</h2>
+                                        
+                                        {/* Search & Filter Controls */}
+                                        <div className="flex gap-3 w-full sm:w-auto">
+                                            <div className="relative flex-1 sm:w-48">
+                                                <i className="fas fa-search absolute left-3 top-3 text-slate-400"></i>
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="Search..." 
+                                                    value={searchTerm}
+                                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg py-2 pl-9 pr-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                                                />
+                                            </div>
+                                            <select 
+                                                value={filterType} 
+                                                onChange={(e) => setFilterType(e.target.value)}
+                                                className="bg-slate-900 border border-slate-700 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-indigo-500">
+                                                <option value="all">All</option>
+                                                <option value="income">Income Only</option>
+                                                <option value="expense">Expenses Only</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div className="overflow-x-auto max-h-80">
+                                        <table className="w-full text-left border-collapse relative">
+                                            <thead className="sticky top-0 z-10 bg-slate-800 shadow-md">
+                                                <tr className="text-slate-400 text-sm uppercase tracking-wider">
+                                                    <th className="p-4 font-medium">Date</th>
+                                                    <th className="p-4 font-medium">Description</th>
+                                                    <th className="p-4 font-medium">Category</th>
+                                                    <th className="p-4 font-medium text-right">Amount</th>
+                                                    <th className="p-4 font-medium text-center">Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-700/50">
+                                                {filteredTransactions.length === 0 ? (
+                                                    <tr><td colSpan="5" className="p-8 text-center text-slate-500">No transactions found.</td></tr>
+                                                ) : (
+                                                    filteredTransactions.map((t) => (
+                                                        <tr key={t.id} className="hover:bg-slate-800/30 transition-colors">
+                                                            <td className="p-4 text-slate-400 text-sm whitespace-nowrap">{t.date}</td>
+                                                            <td className="p-4 font-medium">{t.text}</td>
+                                                            <td className="p-4">
+                                                                <span className="bg-slate-700/50 border border-slate-600 text-xs px-2 py-1 rounded-md">{t.category}</span>
+                                                            </td>
+                                                            <td className={`p-4 font-bold text-right whitespace-nowrap ${t.type === 'income' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                {t.type === 'income' ? '+' : '-'} {currency} {t.amount}
+                                                            </td>
+                                                            <td className="p-4 text-center">
+                                                                <button onClick={() => deleteTransaction(t.id)} className="text-slate-500 hover:text-rose-500 transition-colors p-2 rounded hover:bg-rose-500/10">
+                                                                    <i className="fas fa-trash"></i>
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                        ) : (
+
+                            /* --- SETTINGS VIEW --- */
+                            <div className="max-w-2xl animate-fade-in">
+                                <div className="glass-panel p-8 rounded-2xl mb-8 space-y-8">
+                                    
+                                    <div>
+                                        <h2 className="text-xl font-bold mb-4 border-b border-slate-700 pb-2"><i className="fas fa-user mr-2 text-indigo-400"></i> Profile</h2>
+                                        <label className="text-xs text-slate-400 uppercase tracking-wider mb-2 block">Display Name</label>
+                                        <input 
+                                            type="text" 
+                                            value={userName} 
+                                            onChange={(e) => setUserName(e.target.value)} 
+                                            className="w-full max-w-md bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500 transition" 
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <h2 className="text-xl font-bold mb-4 border-b border-slate-700 pb-2"><i className="fas fa-sliders-h mr-2 text-indigo-400"></i> App Preferences</h2>
+                                        
+                                        <div className="mb-4">
+                                            <label className="text-xs text-slate-400 uppercase tracking-wider mb-2 block">Default Currency</label>
+                                            <select 
+                                                value={currency} 
+                                                onChange={(e) => setCurrency(e.target.value)} 
+                                                className="w-full max-w-md bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500 transition">
+                                                <option value="R">ZAR (R)</option>
+                                                <option value="$">USD ($)</option>
+                                                <option value="€">EUR (€)</option>
+                                                <option value="£">GBP (£)</option>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-xs text-slate-400 uppercase tracking-wider mb-2 block">Monthly Budget Target</label>
+                                            <div className="relative max-w-md">
+                                                <span className="absolute left-4 top-3 text-slate-400">{currency}</span>
+                                                <input 
+                                                    type="number" 
+                                                    value={monthlyBudget} 
+                                                    onChange={(e) => setMonthlyBudget(e.target.value)} 
+                                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 pl-8 text-white focus:outline-none focus:border-indigo-500 transition" 
+                                                />
+                                            </div>
+                                            <p className="text-xs text-slate-500 mt-2">Sets the goal limit for the progress bar on your dashboard.</p>
+                                        </div>
+                                    </div>
+
+                                    {/* NEW FEATURE 3: EXPORT DATA */}
+                                    <div>
+                                        <h2 className="text-xl font-bold mb-4 border-b border-slate-700 pb-2"><i className="fas fa-file-export mr-2 text-emerald-400"></i> Data Management</h2>
+                                        <p className="text-sm text-slate-400 mb-4">Download a copy of your transaction history to your device as a CSV file, which can be opened in Excel or Google Sheets.</p>
+                                        <button 
+                                            onClick={exportToCSV} 
+                                            className="bg-emerald-500/20 text-emerald-400 border border-emerald-500 hover:bg-emerald-500 hover:text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                                            <i className="fas fa-download mr-2"></i> Download CSV
+                                        </button>
+                                    </div>
+
+                                </div>
+
+                                <div className="glass-panel p-8 rounded-2xl border-l-4 border-rose-500 bg-rose-900/10">
+                                    <h2 className="text-xl font-bold text-rose-400 mb-2">Danger Zone</h2>
+                                    <p className="text-sm text-slate-400 mb-4">Permanently delete all your transaction data. This action cannot be recovered.</p>
+                                    <button 
+                                        onClick={clearAllData} 
+                                        className="bg-rose-500 hover:bg-rose-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                                        <i className="fas fa-trash-alt mr-2"></i> Clear All Data
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
