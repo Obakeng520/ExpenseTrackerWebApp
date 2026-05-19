@@ -1,6 +1,11 @@
 # 📊 Expense Tracker Pro
 
+[![Live Demo](https://img.shields.io/badge/Live-Demo-emerald?style=for-the-badge&logo=vercel)](https://expense-tracker-web-app-omega.vercel.app/)
+
 A modern, full-featured expense tracking dashboard built with React and Tailwind CSS. Designed with a sleek dark-mode glassmorphism UI, this application allows users to seamlessly track income, monitor expenses against monthly budgets, and visualize spending habits in real-time.
+
+## 🔗 Live Application
+Check out the live deployment here: **[Expense Tracker Pro Live](https://expense-tracker-web-app-omega.vercel.app/)**
 
 ## ✨ Key Features
 
